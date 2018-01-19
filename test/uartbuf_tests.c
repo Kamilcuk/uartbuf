@@ -27,7 +27,7 @@
 
 #define TEST(expr) assert(expr)
 
-int uartbufrx_test_1()
+void uartbufrx_test_1()
 {
     struct uartbufrx_s *t = &UARTBUFRX_INIT(((uint8_t[256]){0}), 256);
     const uint8_t bufin[] = "1234567890a";
@@ -35,70 +35,69 @@ int uartbufrx_test_1()
 
     {
         uartbufrx_RxCplt_IRQHandler(t, bufin, 10 );
-        TEST( uartbufrx_buflen(t) == 10 );
+        TEST( uartbufrx_len(t) == 10 );
         uartbufrx_FlushAll(t);
-        TEST( uartbufrx_buflen(t) == 0 );
+        TEST( uartbufrx_len(t) == 0 );
     }
     {
         uartbufrx_RxCplt_IRQHandler(t, bufin, 10 );
-		TEST( uartbufrx_buflen(t) == 10 );
+		TEST( uartbufrx_len(t) == 10 );
         TEST( !memcmp( uartbufrx_buf(t), bufin, 10) );
         uartbufrx_FlushN(t, 5);
         TEST( !memcmp( uartbufrx_buf(t), &bufin[5], 5) );
         uartbufrx_RxCplt_IRQHandler(t, &bufin[0], 5 );
         TEST( !memcmp( uartbufrx_buf(t), &bufin[5], 5) );
         TEST( !memcmp( &uartbufrx_buf(t)[5] , &bufin[0], 5) );
-        TEST( uartbufrx_buflen(t) == 10 );
+        TEST( uartbufrx_len(t) == 10 );
         uartbufrx_FlushN(t, 5);
         TEST( !memcmp( &uartbufrx_buf(t)[0] , &bufin[0], 5) );
-        TEST( uartbufrx_buflen(t) == 5 );
+        TEST( uartbufrx_len(t) == 5 );
         uartbufrx_FlushN(t, 5);
-        TEST( uartbufrx_buflen(t) == 0 );
+        TEST( uartbufrx_len(t) == 0 );
     }
     {
         uartbufrx_RxCplt_IRQHandler(t, bufin, 10 );
         uartbufrx_Read(t, buf, 10, 0);
         TEST( !memcmp(bufin, buf, 10 ) );
-        TEST( uartbufrx_buflen(t) == 0 );
+        TEST( uartbufrx_len(t) == 0 );
     }
     {
         uartbufrx_RxCplt_IRQHandler(t, bufin, 10 );
 		uartbufrx_Read(t, buf, 10, 0 );
         TEST( !memcmp(bufin, buf, 10 ) );
-        TEST( uartbufrx_buflen(t) == 0 );
+        TEST( uartbufrx_len(t) == 0 );
     }
     {
-        TEST( uartbufrx_bufsize(t) >= 20 ); // test for more than 20 chars
+        TEST( uartbufrx_size(t) >= 20 ); // test for more than 20 chars
         // non DMA transfer into RxCplt
         uartbufrx_RxCplt_IRQHandler(t, bufin, 10); // 10 in
-        TEST( uartbufrx_buflen(t) == 10 );
+        TEST( uartbufrx_len(t) == 10 );
         // DMA transfer into uartbufrx_buf
         memcpy(&uartbufrx_buf_nonconst(t)[10], bufin, 10); // DMA transfer 10 in
         // inform we have transfered DMA data into t->buf
-        uartbufrx_RxCplt_DMA_IRQHandler(t, 10); // notify of 10 in
-        TEST( uartbufrx_buflen(t) == 20 );
+        uartbufrx_RxCplt_DMA_IRQHandler(t, &uartbufrx_buf_nonconst(t)[10], 10); // notify of 10 in
+        TEST( uartbufrx_len(t) == 20 );
         TEST( !memcmp( &uartbufrx_buf(t)[0], &bufin[0], 10) );
         TEST( !memcmp( &uartbufrx_buf(t)[10], &bufin[0], 10) );
         uartbufrx_FlushAll(t);
     }
     {
-        TEST( uartbufrx_bufsize(t) >= 20 ); // test for more than 20 chars
+        TEST( uartbufrx_size(t) >= 20 ); // test for more than 20 chars
         // non DMA transfer into RxCplt
         uartbufrx_RxCplt_IRQHandler(t, bufin, 10); // 10 in
-        TEST( uartbufrx_buflen(t) == 10 );
+        TEST( uartbufrx_len(t) == 10 );
         // DMA transfer into uartbufrx_buf
         memcpy(&uartbufrx_buf_nonconst(t)[10], bufin, 10); // DMA transfer 10 in
         // get 5 data
         uartbufrx_FlushN(t, 5);
-        TEST( uartbufrx_buflen(t) == 5 );
+        TEST( uartbufrx_len(t) == 5 );
         // inform we have transfered DMA data into t->buf
-        uartbufrx_RxCplt_DMA_IRQHandler(t, 10); // notify of 10 in
-        TEST( uartbufrx_buflen(t) == 15 );
+        uartbufrx_RxCplt_DMA_IRQHandler(t, &uartbufrx_buf_nonconst(t)[10], 10); // notify of 10 in
+        TEST( uartbufrx_len(t) == 15 );
         TEST( !memcmp( &uartbufrx_buf(t)[0], &bufin[5], 5) );
         TEST( !memcmp( &uartbufrx_buf(t)[5], &bufin[0], 10) );
         uartbufrx_FlushAll(t);
     }
-    return 0;
 }
 
 struct uartbufrx_test_findmsg_arg_s {
@@ -127,7 +126,7 @@ int uartbufrx_test_findmsg_checkEnding(const uint8_t *buf, size_t size, void *ar
 	return 0;
 }
 
-int uartbufrx_test_2_findmsg_beginning()
+void uartbufrx_test_2_findmsg_beginning()
 {
 	const struct uartbufrx_findmsgconf_s conf = {
 		.minMsgLen = 2,
@@ -137,18 +136,19 @@ int uartbufrx_test_2_findmsg_beginning()
 	};
 	struct uartbufrx_s *t = &UARTBUFRX_INIT(((uint8_t[256]){0}), 256);
 	const uint8_t bufin[] = "abcdef[2234567890]abcdef[3234567}abcdef";
-	int ret;
+	int ret; (void)ret;
+	timeout_t to = timeout_create(0);
 
 	{
 		uartbufrx_FlushAll(t);
 		struct uartbufrx_test_findmsg_arg_s arg = {0};
 		uartbufrx_RxCplt_IRQHandler(t, bufin, sizeof(bufin));
 		ret = uartbufrx_findmsg_beginning(t,
-			conf.minMsgLen, conf.checkBeginning, &arg, 0 );
+			conf.minMsgLen, conf.checkBeginning, &arg, &to );
 		TEST(ret == 2);
 		TEST(arg.checkBeginning_cnt == 7);
 		ret = uartbufrx_findmsg_beginning(t,
-			conf.minMsgLen, conf.checkBeginning, &arg, 0 );
+			conf.minMsgLen, conf.checkBeginning, &arg, &to );
 		TEST(ret == 2);
 		TEST(arg.checkBeginning_cnt == 8);
 	}
@@ -157,19 +157,18 @@ int uartbufrx_test_2_findmsg_beginning()
 		struct uartbufrx_test_findmsg_arg_s arg = {0};
 		uartbufrx_RxCplt_IRQHandler(t, bufin, 5);
 		ret = uartbufrx_findmsg_beginning(t,
-			conf.minMsgLen, conf.checkBeginning, &arg, 0 );
+			conf.minMsgLen, conf.checkBeginning, &arg, &to );
 		TEST(ret == -ETIMEDOUT);
 		TEST(arg.checkBeginning_cnt == 4);
 		uartbufrx_RxCplt_IRQHandler(t, &bufin[5], 5);
 		ret = uartbufrx_findmsg_beginning(t,
-			conf.minMsgLen, conf.checkBeginning, &arg, 0 );
+			conf.minMsgLen, conf.checkBeginning, &arg, &to );
 		TEST(ret == 2);
 		TEST(arg.checkBeginning_cnt == 7);
 	}
-	return 0;
 }
 
-int uartbufrx_test_3_findmsg_ending()
+void uartbufrx_test_3_findmsg_ending()
 {
 	const struct uartbufrx_findmsgconf_s conf = {
 		.minMsgLen = 2,
@@ -180,6 +179,7 @@ int uartbufrx_test_3_findmsg_ending()
 	struct uartbufrx_s *t = &UARTBUFRX_INIT(((uint8_t[256]){0}), 256);
 	const uint8_t bufin[] = "abcdef[2234567890]abcdef[3234567}abcdef";
 	int ret;
+	timeout_t to = timeout_create(0);
 
 	{
 		uartbufrx_FlushAll(t);
@@ -187,7 +187,7 @@ int uartbufrx_test_3_findmsg_ending()
 		const uint8_t bufin2[] = "123[123]123";
 		uartbufrx_RxCplt_IRQHandler(t, bufin2, sizeof(bufin2));
 		ret = uartbufrx_findmsg_ending(t, 2,
-			20, conf.checkEnding, &arg, 0 );
+			20, conf.checkEnding, &arg, &to );
 		printf("%d %d \n", ret, arg.checkEnding_cnt);
 	}
 	{
@@ -195,29 +195,27 @@ int uartbufrx_test_3_findmsg_ending()
 		struct uartbufrx_test_findmsg_arg_s arg = {0};
 		uartbufrx_RxCplt_IRQHandler(t, bufin, 12);
 		ret = uartbufrx_findmsg_ending(t, 2,
-			10, conf.checkEnding, &arg, 0 );
+			10, conf.checkEnding, &arg, &to );
 		TEST(ret == -ENOBUFS);
 		TEST(arg.checkEnding_cnt == 9);
 
 		arg.checkEnding_cnt = 0;
 		ret = uartbufrx_findmsg_ending(t, 2,
-			20, conf.checkEnding, &arg, 0 );
+			20, conf.checkEnding, &arg, &to );
 		TEST(ret == -ETIMEDOUT);
 		TEST(arg.checkEnding_cnt == 11); // 12 chars inbuffer - ((2)-1)
 
 		arg.checkEnding_cnt = 0;
 		uartbufrx_RxCplt_IRQHandler(t, &bufin[12], 10);
 		ret = uartbufrx_findmsg_ending(t, 2,
-			21, conf.checkEnding, &arg, 0 );
+			21, conf.checkEnding, &arg, &to );
 		TEST(ret == 18);
 		TEST(arg.checkEnding_cnt == 17);
 	}
-
-	return 0;
 }
 
 
-int uartbufrx_test_4_findmsg()
+void uartbufrx_test_4_findmsg()
 {
 	const struct uartbufrx_findmsgconf_s conf = {
 				.minMsgLen = 2,
@@ -242,5 +240,45 @@ int uartbufrx_test_4_findmsg()
 		ret = uartbufrx_findmsg(t, NULL, &conf, &arg, 0 );
 		printf("%d %d %d \n", ret, arg.checkBeginning_cnt, arg.checkEnding_cnt);
 	}
-	return 0;
 }
+
+static void test1_ArmReceive(struct uartbufrx_s *t, uint8_t buf[], size_t size)
+{
+	printf("  %s %p %p %zu : %p\n", __func__, t, buf, size, &t->buf[20]);
+	TEST(t->priv.test2_data.buf == buf);
+	TEST(t->priv.test2_data.size == size);
+}
+
+void uartbufrx_test2_test1()
+{
+	struct uartbufrx_s *t = &UARTBUFRX_INIT(((uint8_t[256]){0}), 256);
+	t->ArmReceive = test1_ArmReceive;
+	{
+		t->priv.test2_data.buf = t->buf;
+		t->priv.test2_data.size = uartbufrx_size(t);
+		uartbufrx_len(t);
+	}
+	{
+		uint8_t buf[20];
+		uartbufrx_RxCplt_IRQHandler(t, buf, 20);
+		t->priv.test2_data.buf = &t->buf[20];
+		t->priv.test2_data.size = uartbufrx_size(t) - 20;
+		uartbufrx_len(t);
+	}
+	{
+		uint8_t buf[20];
+		uartbufrx_RxCplt_IRQHandler(t, buf, 20);
+		t->priv.test2_data.buf = &t->buf[40];
+		t->priv.test2_data.size = uartbufrx_size(t) - 40;
+		uartbufrx_len(t);
+	}
+	uartbufrx_FlushAll(t);
+	t->priv.test2_data.buf = &t->buf[0];
+	t->priv.test2_data.size = uartbufrx_size(t) - 0;
+	TEST( uartbufrx_free(t) == uartbufrx_size(t) );
+}
+
+void uartbufrx_test2_test2()
+{
+}
+

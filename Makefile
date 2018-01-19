@@ -3,7 +3,7 @@ src=$(wildcard src/*.c) $(wildcard test/*.c)
 inc=$(wildcard src/*.h) $(wildcard test/*.h)
 all: test.out
 test.out: $(src) $(inc)
-	gcc $(src) -fsanitize=address -Wall -lpthread -Isrc -Itest -o $@
+	gcc -fsanitize=address -std=gnu11 -lm -Wall -lpthread -Itest -Isrc -g3 -O3 $(src) -o $@
 
 test: test.out
 	./test.out

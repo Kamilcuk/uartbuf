@@ -6,38 +6,32 @@
  */
 #include "timeout.h"
 
-#include "hal.h" // HAL_GetTick()
+#include <time.h>
 
-inline
-timeout_t timeout_create(uint32_t Timeout)
+static
+clock_t msclock()
 {
-	if ( Timeout == 0 || Timeout == UINT32_MAX )
-		return (timeout_t){Timeout};
-	const uint32_t Ticknow = HAL_GetTick();
-	uint32_t Tickstop = Timeout + Ticknow;
-	if ( Tickstop == 0 || Tickstop == UINT32_MAX ) {
-		// we will wait a little longer
-		// however this will occur NEVER
-		++Tickstop;
-	}
-	return (timeout_t){ .Tickstop = Tickstop };
+	return clock()/(CLOCKS_PER_SEC/1000);
 }
 
-inline
-uint32_t timeout_get(timeout_t *this)
+timeout_t timeout_create(clock_t Timeout)
 {
-	if ( this->Tickstop == 0 || this->Tickstop == UINT32_MAX ) return this->Tickstop;
-	const uint32_t Ticknow = HAL_GetTick();
-	if ( this->Tickstop < Ticknow ) {
-		this->Tickstop = 0;
+	timeout_t ret = { .Timeout = Timeout };
+	if (!( Timeout == 0 || Timeout == TIMEOUT_MAX )) {
+		ret.Tickstart = msclock();
+	}
+	return ret;
+}
+
+clock_t timeout_get(timeout_t *this)
+{
+	if ( this->Timeout == 0 || this->Timeout == TIMEOUT_MAX ) {
+		return this->Timeout;
+	}
+	const clock_t now = msclock();
+	const clock_t Tickstop = this->Tickstart + this->Timeout;
+	if ( now < Tickstop ) {
 		return 0;
 	}
-	return this->Tickstop - Ticknow;
+	return Tickstop - now;
 }
-
-inline
-bool timeout_expired(timeout_t *this)
-{
-	return timeout_get(this) == 0;
-}
-

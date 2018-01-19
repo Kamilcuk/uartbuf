@@ -22,11 +22,15 @@
 #define TIMEOUT_MAX  UINT32_MAX
 
 typedef struct timeout_s {
-        uint32_t Tickstop;
+	clock_t Tickstart;
+	clock_t Timeout;
 } timeout_t;
 
-timeout_t timeout_create(uint32_t Timeout);
-uint32_t timeout_get(timeout_t *this);
-bool timeout_expired(timeout_t *this);
+#define TIMEOUT_INIT(_Timeout) { .Tickstart = clock()/(CLOCKS_PER_SEC/1000), .Timeout = _Timeout}
+timeout_t timeout_create(clock_t Timeout);
+#define timeout_init(_this, _Timeout)          do{ *(_this) = timeout_create(_Timeout); }while(0)
+#define timeout_deinit(_this)
+clock_t timeout_get(timeout_t *this);
+#define timeout_expired(_this) ( timeout_get(this) == 0 )
 
 #endif

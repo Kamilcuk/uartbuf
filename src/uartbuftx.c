@@ -5,8 +5,9 @@
  *      Author: Kamil Cukrowski
  *     License: jointly under MIT License and Beerware License
  */
-#include "_uartbuf.h"
 #include "uartbuftx.h"
+
+#include "_uartbuf.h"
 
 #include <string.h>
 #include <assert.h>
@@ -18,122 +19,208 @@
 	_ToDo; \
 	_ToDo = (uartbuftx_EnableIRQ_Callback(t), false) )
 
+#if SIZE_T_ATOMIC_READ
+# define uartbuftx_SIZE_T_ATOMIC_BLOCK(t) /**/
+#else
+# define uartbuftx_SIZE_T_ATOMIC_BLOCK(t) uartbuftx_ATOMIC_BLOCK(t)
+#endif
+
 /* Private Functions ----------------------------------------------------- */
 
-static inline
-bool _uartbuftx_IsWriting(struct uartbuftx_s *t)
+static
+size_t uartbuftx_fifo_tail(const struct uartbuftx_s *t)
 {
-	return t->nowtxpos;
+	size_t ret;
+	uartbuftx_SIZE_T_ATOMIC_BLOCK(t) {
+		ret = t->tail;
+	}
+	return ret;
+}
+
+static
+size_t uartbuftx_fifo_txsize(const struct uartbuftx_s *t)
+{
+	size_t ret;
+	uartbuftx_SIZE_T_ATOMIC_BLOCK(t) {
+		ret = t->txsize;
+	}
+	return ret;
+}
+
+static inline
+size_t uartbuftx_fifo_GetBiggestUsedBlock_IRQHandler(const struct uartbuftx_s *t)
+{
+	const size_t head = t->head;
+	const size_t tail = t->tail;
+	const size_t size = t->size;
+	const size_t ret = ( head >= tail ) ? ( head - tail ) : ( size - tail );
+	UARTBUF_DBG("%s %zu %zu %zu %zu\n", __func__, head, tail, size, ret);
+	return ret;
+}
+
+static inline
+size_t uartbuftx_fifo_GetBiggestFreeBlock_IRQHandler(const struct uartbuftx_s *t)
+{
+	const size_t head = t->head;
+	const size_t tail = t->tail;
+	const size_t size = t->size;
+	const size_t ret = ( head >= tail ) ? ( head - tail ) : ( size - tail );
+	UARTBUF_DBG("%s %zu %zu %zu %zu\n", __func__, head, tail, size, ret);
+	return ret;
+}
+
+static inline
+size_t uartbuftx_fifo_IncPos(const struct uartbuftx_s *t, size_t pos, size_t n)
+{
+	unitassert(pos + n <= t->size);
+	pos += n;
+	if ( pos == t->size ) {
+		pos = 0;
+	}
+	return pos;
+}
+
+/* Public Functions -------------------------------------------------------- */
+
+inline
+bool uartbuftx_IsWriting(const struct uartbuftx_s *t)
+{
+	return uartbuftx_IsWriting_Callback(t);
+}
+
+/**
+ * Calls Flush_Callback.
+ * @param t
+ */
+void uartbuftx_Flush(struct uartbuftx_s *t)
+{
+	while ( uartbuftx_IsWriting(t) ) {
+		uartbuftx_Flush_Callback(t);
+	}
+}
+
+void uartbuftx_Write(struct uartbuftx_s *t, const uint8_t buf[restrict], size_t size)
+{
+	while( size ) {
+		{
+			// if theres no free space, wait for free space by calling Flush Callback
+			const size_t tail = uartbuftx_fifo_tail(t);
+			const bool isfree = t->head != tail;
+			if ( !isfree ) {
+				uartbuftx_Flush_Callback(t);
+				continue;
+			}
+		}
+
+		t->buf[t->head] = buf[0];
+		{
+			const size_t newhead = uartbuftx_fifo_IncPos(t, t->head, 1);
+			uartbuftx_SIZE_T_ATOMIC_BLOCK(t) {
+				t->head = newhead;
+			}
+		}
+		if ( !uartbuftx_IsWriting(t) ) {
+			t->head = t->tail = 0;
+			const size_t txsize = uartbuftx_fifo_GetBiggestUsedBlock_IRQHandler(t);
+			uartbuftx_Write_Callback(t, &t->buf[t->tail], txsize);
+		}
+
+		++buf;
+		--size;
+	}
+}
+
+void uartbuftx_printf(struct uartbuftx_s *t)
+{
+	printf("head=%2zu size=%2zu tail=%2zu txsize=%2zu \"",
+			t->head, t->size, ufifo_tail(t), ufifo_txsize(t));
+	for(size_t i = 0; i < t->size; ++i) {
+		printf("%c", t->buf[i]);
+	}
+	printf("\"\n");
+}
+
+void uartbuftx_TxCplt_IRQHandler(struct uartbuftx_s *t, size_t size)
+{
+	unitassert( t->tail + size <= ( t->head >= t->tail ? t->head : t->size ) );
+	t->tail = uartbuftx_fifo_IncPos(t, t->tail, size);
+	const size_t txsize = uartbuftx_fifo_GetBiggestUsedBlock_IRQHandler(t);
+	uartbuftx_Write_IRQHandler_Callback(t, &t->buf[t->tail], txsize);
 }
 
 
 /* Callback Functions -------------------------------------------------------- */
 
-#ifdef __weak_symbol
-
+/**
+ * Enable uartbuftx_RxCplt_IRQHandler to be called. Leave critical section.
+ * @param t
+ */
 __weak_symbol
 void uartbuftx_EnableIRQ_Callback(const struct uartbuftx_s *t)
 {
-	// Enable TxCplt_IRQHndler from occuring
+#if UARTBUFTX_USE_PNT_CALLBACKS
+	if ( t->EnableIRQ ) t->EnableIRQ(t);
+#endif // UARTBUFTX_USE_PNT_CALLBACKS
 	// NVIC_Enable_IRQ(IRQ_UART2);
 }
 
+/**
+ * Dissallow RxCplt_IRQHandler to be called. Enter critical section.
+ * @param t
+ */
 __weak_symbol
 void uartbuftx_DisableIRQ_Callback(const struct uartbuftx_s *t)
 {
-	// Disable TxCplt_IRQHndler from occuring
+#if UARTBUFTX_USE_PNT_CALLBACKS
+	if ( t->DisableIRQ ) t->DisableIRQ(t);
+#endif // UARTBUFTX_USE_PNT_CALLBACKS
 	// NVIC_Disable_IRQ(IRQ_UART2);
 }
 
+/**
+ * Write size bytes starting from buf to uart
+ * @param t
+ * @param buf
+ * @param size
+ */
 __weak_symbol
-void uartbuftx_Write_Callback(const struct uartbuftx_s *t, const uint8_t buf[], size_t size)
+void uartbuftx_Write_Callback(struct uartbuftx_s *t, const uint8_t buf[], size_t size)
 {
-	// set up asynchronous write of buf and size characters
+#if UARTBUFTX_USE_PNT_CALLBACKS
+	if ( t->Write ) t->Write(t, buf, size);
+#endif // UARTBUFTX_USE_PNT_CALLBACKS
+	// if ( HAL_UART_Transmit_DMA(t->priv.huart, buf, size, 100) != HAL_OK ) assert(0);
+	// or
+	// if ( HAL_UART_Transmit(t->priv.huart, buf, size, 100) != HAL_OK ) assert(0);
+	// uartbuftx_TxCplt_IRQHandler((struct uartbuftx_s *)t);
+}
+
+/**
+ * Same as uartbuftx_Write_Callback but called from IRQHandler
+ * @param t
+ * @param buf
+ * @param size
+ */
+__weak_symbol
+void uartbuftx_Write_IRQHandler_Callback(struct uartbuftx_s *t, const uint8_t buf[], size_t size)
+{
+#if UARTBUFTX_USE_PNT_CALLBACKS
+	if ( t->Write_IRQHandler ) t->Write_IRQHandler(t, buf, size);
+#endif // UARTBUFTX_USE_PNT_CALLBACKS
+	// if ( size == 0 ) return;
 	// if ( HAL_UART_Transmit_DMA(t->priv.huart, buf, size, 100) != HAL_OK ) assert(0);
 }
 
+/**
+ * Wait until currently asynchronous tranmission is finished.
+ * This should wait until TxCplt_IRQHandler is called.
+ * @param t
+ */
 __weak_symbol
 void uartbuftx_Flush_Callback(const struct uartbuftx_s *t)
 {
-	// wait until current asynchronous transmission is finished
-	// while( !t->priv.huart.state != HAL_UART_STATE_TX );
+#if UARTBUFTX_USE_PNT_CALLBACKS
+	if ( t->Flush ) t->Flush(t);
+#endif // UARTBUFTX_USE_PNT_CALLBACKS
+	// BoardEnterSleepModeToPreserveEnergyAndWakeUpOnUsartInterrupt();
 }
-
-#endif // __weak_symbol
-
-/* Public Functions -------------------------------------------------------- */
-
-void uartbuftx_Write(struct uartbuftx_s *t, const uint8_t *buf, size_t size)
-{
-	if ( size == 0 ) {
-		uartbuftx_Flush(t);
-		return;
-	}
-
-	if ( t->bufsize == 0 ) {
-		// unbuffered write - synchronous mode
-		uartbuftx_Flush(t);
-		uartbuftx_Write_Callback(t, buf, size);
-		uartbuftx_Flush(t);
-	} else {
-		// buffered write
-
-		// are we able to get TxCpltInterrupt ?
-		if ( t->use_interrupt ) {
-			// TxCpltInterrupt may occur (if we are busy transmitting)
-			bool flag = false;
-			uartbuftx_ATOMIC_BLOCK(t) {
-				// Will TxCpltInterrupt be called, cause we are transmitting, and
-				// does t->buf fits into the free space in t->buf ?
-				if ( _uartbuftx_IsWriting(t) && size < ( t->bufsize - t->nexttxpos ) ) {
-					// copy buf into the free space in t->buf
-					memcpy(&t->buf[t->nexttxpos], buf, size);
-					// inform interrupt it will need to transmit more characters
-					t->nexttxpos += size;
-					// done here - return
-					flag = true;
-				}
-			}
-			// don't return from ATOMIC_BLOCK
-			if ( flag ) return;
-		}
-
-		// does buf fits into t->buf ?
-		if ( size > t->bufsize ) {
-			// transmit all characters that don't fit in buffer in synchronous mode
-			const size_t len = size - t->bufsize;
-			uartbuftx_Flush(t);
-			uartbuftx_Write_Callback(t, buf, len);
-			size -= len;
-			buf += len;
-			// transmit rest of characters in asynchronous mode
-		}
-
-		uartbuftx_Flush(t);
-		memcpy(t->buf, buf, size);
-		t->nowtxpos = t->nexttxpos = size;
-		uartbuftx_Write_Callback(t, t->buf, size);
-
-		// continue transmission in interrupt
-	}
-}
-
-void uartbuftx_Flush(struct uartbuftx_s *t)
-{
-	uartbuftx_Flush_Callback(t);
-	assert( t->use_interrupt && !_uartbuftx_IsWriting(t) );
-}
-
-void uartbuftx_TxCplt_IRQHandler(struct uartbuftx_s *t)
-{
-	assert( t->nowtxpos <= t->nexttxpos );
-	if ( t->nowtxpos < t->nexttxpos ) {
-		const size_t size = t->nexttxpos - t->nowtxpos;
-		memmove(&t->buf[0], &t->buf[t->nowtxpos], size);
-		t->nowtxpos = t->nexttxpos = size;
-		uartbuftx_Write_Callback(t, &t->buf[0], t->nowtxpos);
-	} else {
-		t->nowtxpos = t->nexttxpos = 0;
-	}
-}
-

@@ -5,11 +5,11 @@
  *      Author: Kamil Cukrowski
  *     License: jointly under MIT License and Beerware License
  */
-#include "_uartbuf.h"
 #include "uartbufrx.h"
 
+#include "_uartbuf.h"
+
 #include <assert.h>
-#include <stdio.h>
 #include <string.h>
 
 /* Private Macros -------------------------------------------- */
@@ -19,31 +19,13 @@
 		_ToDo; \
 		_ToDo = (uartbufrx_EnableIRQ_Callback(t), false) )
 
-#define PRINTERR(...)   fprintf(stderr, __VA_ARGS__)
-//#define PRINTERR(...) do { __asm__ __volatile__ ("bkpt #0"); printf(__VA_ARGS__); }while(0)
-#define uartbuf_DEBUG 0
-#if defined(uartbuf_DEBUG) && uartbuf_DEBUG
-#define PRINTDBG(...)   printf(__VA_ARGS__)
-#define PRINTDBGARR(how, arr, size, stop, start, ...) \
-		do { \
-			printf("%s:" start, __FUNCTION__, ##__VA_ARGS__); \
-			for(int _i = 0; _i < (size); ++_i) { \
-				printf( (how), (arr)[_i] ); \
-			} \
-			printf(stop); \
-		} while(0)
-#else
-#define PRINTDBG(...)
-#define PRINTDBGARR(...)
-#endif
-
 /* Private Functions ---------------------------------------------------- */
 
 static inline
 size_t _uartbufrx_bufpos(struct uartbufrx_s *t)
 {
 	size_t tmp;
-#if SIZE_T_ATOMIC_READ
+#if ! SIZE_T_ATOMIC_READ
 	uartbufrx_ATOMIC_BLOCK(t)
 #endif
 	{
@@ -52,56 +34,111 @@ size_t _uartbufrx_bufpos(struct uartbufrx_s *t)
 	return tmp;
 }
 
-static
-void _uartbufrx_Receive_IT(struct uartbufrx_s *t)
-{
-	size_t bufpos = _uartbufrx_bufpos(t);
-	const size_t freesize = t->bufsize - bufpos;
-	if ( freesize ) {
-		uint8_t * const buf = &t->buf[bufpos];
-		uartbufrx_Receive_IT_Callback(t, buf, freesize);
-	}
-}
-
 static inline
 bool _uartbufrx_IsOverflowed(struct uartbufrx_s *t)
 {
-	return uartbufrx_buflen(t) == t->bufsize;
+	return uartbufrx_len(t) == t->bufsize;
 }
-
 
 /* Exported Callback Functions ------------------------------------------ */
 
-#ifdef __weak_symbol
-
+/**
+ * Enable RxCplt_IRQHandler to be called. Leave critical section.
+ * @param t
+ */
 __weak_symbol
 void uartbufrx_EnableIRQ_Callback(const struct uartbufrx_s *t)
 {
+#if UARTBUFRX_USE_PNT_CALLBACKS
+	if ( t->EnableIRQ ) t->EnableIRQ(t);
+#endif // UARTBUFRX_USE_PNT_CALLBACKS
+	// NVIC_Enable_IRQ(IRQ_UART2);
 }
 
+/**
+ * Dissallow RxCplt_IRQHandler to be called. Enter critical section.
+ * @param t
+ */
 __weak_symbol
 void uartbufrx_DisableIRQ_Callback(const struct uartbufrx_s *t)
 {
+#if UARTBUFRX_USE_PNT_CALLBACKS
+	if ( t->DisableIRQ ) t->DisableIRQ(t);
+#endif // UARTBUFRX_USE_PNT_CALLBACKS
+	// NVIC_Disable_IRQ(IRQ_UART2);
 }
 
 __weak_symbol
-void uartbufrx_Receive_IT_Callback(const struct uartbufrx_s *t, uint8_t buf[], size_t size)
+bool uartbufrx_IsReceiving_Callback(const struct uartbufrx_s *t)
 {
-	// check if RxCplt_IRQHandler is armed
-	// if it is, then buf and size args are invalid and this function should return
-	// it it isn't, buf points to receive buffer of size length
-	// this function should arm receiving size data to buf
+#if UARTBUFRX_USE_PNT_CALLBACKS
+	if ( t->IsReceiving ) return t->IsReceiving(t);
+#endif // UARTBUFRX_USE_PNT_CALLBACKS
+	// return t->priv.huart.gstate != HAL_UART_STATE_RX;
+	return false;
+}
+
+/**
+ * Arm receiving data. This gets called from application.
+ * This function should:
+ * - check if RxCplt_IRQHandler is armed
+ * - if it is, this function should return, and buf and size arguments may be invalid
+ *   (as RxCplt_IRQHandler may be called prior to calling this function)
+ * - if it isn't, this function should arm receiving data to receive to buf with size (at maximum)
+ * - if data are to be received directly to buf (like in DMA transfer...),
+ *   call RxCplt_DMA_IRQHandler to notify uartbufrx of incoming data
+ * - if data were received in some external buffer, call RxCplt_IRQHandler to notify uartbufrx
+ * @param t
+ * @param buf pointer to free buffer ready to receive data
+ * @param size size of buf
+ */
+__weak_symbol
+void uartbufrx_ArmReceive_Callback(struct uartbufrx_s *t, uint8_t buf[], size_t size)
+{
+#if UARTBUFRX_USE_PNT_CALLBACKS
+	if ( t->ArmReceive ) t->ArmReceive(t, buf, size);
+#endif // UARTBUFRX_USE_PNT_CALLBACKS
+	// HAL_UART_Receive_DMA(t->priv.huart, buf, size, 10);
+	// or
+	// HAL_UART_Receive(t->priv.huart, buf, size, 1000);
+	// uartbufrx_RxCplt_DMA_IRQHandler(t, size);
+	// or
+	// uint8_t mybuffer[10];
+	// HAL_UART_Receive(t->priv.huart, mybuffer, 10, 1000);
+	// uartbufrx_RxCplt_IRQHandler(t, mybuffer, 10);
+}
+
+/**
+ * This is the same as uartbufrx_ArmReceive_Callback only called from an _IRQHandler
+ * @param t
+ * @param buf
+ * @param size
+ */
+__weak_symbol
+void uartbufrx_ArmReceive_IRQHandler_Callback(struct uartbufrx_s *t, uint8_t buf[], size_t size)
+{
+#if UARTBUFRX_USE_PNT_CALLBACKS
+	if ( t->ArmReceive_IRQHandler ) t->ArmReceive_IRQHandler(t, buf, size);
+#endif // UARTBUFRX_USE_PNT_CALLBACKS
 	// HAL_UART_Receive_DMA(t->priv.huart, buf, size, 10);
 }
 
+/**
+ * Callback for notification of buffer overflow
+ * @param t
+ */
 __weak_symbol
-void uartbufrx_IsOverflowed_Callback(struct uartbufrx_s *t)
+void uartbufrx_Overflowed_Callback(struct uartbufrx_s *t)
 {
-	PRINTERR("uartbufrx overflowed!\n");
-	uartbufrx_FlushAll(t);
+#if UARTBUFRX_USE_PNT_CALLBACKS
+	if ( t->Overflowed ) {
+		t->Overflowed(t);
+	} else
+#endif
+	{
+		fprintf(stderr, "uartbufrx overflowed %zu/%zu!\n", uartbufrx_len(t), uartbufrx_size(t));
+	}
 }
-
-#endif // __weak_symbol
 
 /* Exported Functions ------------------------------------------ */
 
@@ -117,61 +154,72 @@ uint8_t * uartbufrx_buf_nonconst(struct uartbufrx_s *t)
 	return t->buf;
 }
 
+/**
+ * Every time
+ * @param t
+ * @return
+ */
 inline
-size_t uartbufrx_buflen(struct uartbufrx_s *t)
+size_t uartbufrx_len(struct uartbufrx_s *t)
 {
-	/// _uartbufrx_bufpos is called twice
-	/// once in Receive_IT and once when returning
-	/// this is, because Receive_IT may be used for synchronous receiving
-	_uartbufrx_Receive_IT(t);
+	uartbufrx_ArmReceive(t);
 	return _uartbufrx_bufpos(t);
 }
 
 inline
-size_t uartbufrx_bufsize(const struct uartbufrx_s *t)
+size_t uartbufrx_size(const struct uartbufrx_s *t)
 {
 	return t->bufsize;
 }
 
+/**
+ * Get size of free space in buffer
+ * @param t
+ * @return
+ */
+inline
+size_t uartbufrx_free(struct uartbufrx_s *t)
+{
+	return t->bufsize - uartbufrx_len(t);
+}
+
+/**
+ * Check for buffer overflow. If it occurs, callback is called
+ * @param t
+ * @return
+ */
 bool uartbufrx_IsOverflowed(struct uartbufrx_s *t)
 {
 	bool isOverflowed = _uartbufrx_IsOverflowed(t);
 	if ( isOverflowed ) {
-		uartbufrx_IsOverflowed_Callback(t);
+		uartbufrx_Overflowed_Callback(t);
 	}
 	return isOverflowed;
 }
 
-void uartbufrx_Receive_IT(struct uartbufrx_s *t)
+/**
+ * Arm receiving data. This calls callback function if receiving is not armed
+ * @param t
+ */
+void uartbufrx_ArmReceive(struct uartbufrx_s *t)
 {
-	_uartbufrx_Receive_IT(t);
-}
-
-inline
-void uartbufrx_FlushAll(struct uartbufrx_s *t)
-{
-	while(uartbufrx_IsOverflowed(t));
-	uartbufrx_FlushAll_NotOverflowed(t);
-}
-
-void uartbufrx_FlushAll_NotOverflowed(struct uartbufrx_s *t)
-{
-	uartbufrx_ATOMIC_BLOCK(t) {
-		t->bufpos = 0;
+	if (__predict_false( !uartbufrx_IsReceiving_Callback(t) )) {
+		// we are not receiving any data,
+		// so we do not need to fear that RxCplt_IRQHandlers will be called here
+		// so we can access t->bufpos directly
+		uartbufrx_ArmReceive_Callback(t,  &t->buf[t->bufpos], t->bufsize - t->bufpos);
 	}
 }
 
-inline
+/**
+ * Flush number of data in buffer.
+ * @param t
+ * @param n
+ */
 void uartbufrx_FlushN(struct uartbufrx_s *t, size_t n)
 {
-	while(uartbufrx_IsOverflowed(t));
-	return uartbufrx_FlushN_NotOverflowed(t, n);
-}
-
-void uartbufrx_FlushN_NotOverflowed(struct uartbufrx_s *t, size_t n)
-{
-	UARTBUF_DBG("%zd %zd", n, uartbufrx_buflen(t));
-	assert(n <= uartbufrx_buflen(t));
+//	UARTBUF_DBG("%zd %zd", n, uartbufrx_len(t));
+	assert(n <= uartbufrx_len(t));
 	if ( n == 0 ) return;
 	/// now this is a little bit tricky
 	/// we have the knownledge that RxCpltInt puts the data on the end of the buffer
@@ -179,18 +227,19 @@ void uartbufrx_FlushN_NotOverflowed(struct uartbufrx_s *t, size_t n)
 	size_t in = n;
 	bool synchronized = false;
 	for(;;) {
-		const size_t possave = uartbufrx_buflen(t);
-		assert( possave >= in );
-		const size_t len = possave - in;
+		const size_t buflensave = uartbufrx_len(t);
+		assert( buflensave >= in );
+		const size_t len = buflensave - in;
 		// so we can copy from a saved end position to anywhere without ATOMIC_BLOCK
 		memmove(&t->buf[out], &t->buf[in], len);
 		out += len;
+
 		// we should continue copying, until out position is synchronized with buffer positino in an ATOMIC_BLOCK
 		// in another words, during the memmove aboce, no RxCpltInt occured to increment out t->bufpos
 		uartbufrx_ATOMIC_BLOCK(t) {
 			// we have memmoved all data from &t->buf[t->bufpos - n] to &t->buf[0]
 			// however, t->bufpos may got incremented in RxCpltInt
-			if ( possave == t->bufpos ) {
+			if ( buflensave == t->bufpos ) {
 				// all ok, RxCpltInt did not occur during copying
 				// we move t->bufpos to out, where out value should be equal to t->bufpos - n
 				assert( out == t->bufpos - n );
@@ -198,27 +247,47 @@ void uartbufrx_FlushN_NotOverflowed(struct uartbufrx_s *t, size_t n)
 				synchronized = true;
 			}
 		}
+		// don't break from ATOMIC_BLOCK
 		if ( synchronized ) {
 			break;
 		}
-		in = possave;
+
+		in = buflensave;
 	}
 }
 
-void uartbufrx_RxCplt_DMA_IRQHandler(struct uartbufrx_s *t, size_t size)
+/**
+ * Flush all data buffer
+ * @param t
+ */
+inline
+void uartbufrx_FlushAll(struct uartbufrx_s *t)
 {
-	assert(t->bufpos <= t->armpos);
-	const size_t buffree = t->bufsize - t->armpos;
-	assert( size <= buffree );
-	// if bufpos was moved, DMA copied data to a wrong region
-	if ( __predict_false(t->bufpos != t->armpos) ) {
-		// move it to bufpos
-		memmove(&t->buf[t->bufpos], &t->buf[t->armpos], size);
+#if ! SIZE_T_ATOMIC_READ
+	uartbufrx_ATOMIC_BLOCK(t)
+#endif
+	{
+		t->bufpos = 0;
 	}
+}
+
+void uartbufrx_RxCplt_DMA_IRQHandler(struct uartbufrx_s *t, uint8_t buf[], size_t size)
+{
+	// buf must be a pointer in the free space of our buffer
+	assert( &t->buf[t->bufpos] <= buf && buf <= &t->buf[t->bufsize] );
+	// size must be lower then free space in out buffer
+	assert( size <= t->bufsize - t->bufpos );
+
+	// if bufpos was moved, DMA copied data to a wrong region
+	if ( __predict_false(&t->buf[t->bufpos] != buf) ) {
+		// move it to bufpos
+		memmove(&t->buf[t->bufpos], buf, size);
+	}
+
 	// increment bufpos to notify that new data were received
-	t->armpos = t->bufpos += size;
+	t->bufpos += size;
 	// re-arm receiving
-	uartbufrx_Receive_IT(t);
+	uartbufrx_ArmReceive_IRQHandler_Callback(t, &t->buf[t->bufpos], t->bufsize - t->bufpos);
 }
 
 /**
@@ -230,15 +299,21 @@ void uartbufrx_RxCplt_DMA_IRQHandler(struct uartbufrx_s *t, size_t size)
  */
 void uartbufrx_RxCplt_IRQHandler(struct uartbufrx_s *t, const uint8_t buf[restrict], size_t size)
 {
-	const size_t maxsize = t->bufsize - t->bufpos;
-	if ( __predict_false(size > maxsize) ) {
-		size = maxsize;
+	// buf is restricted - must be outside out buffer
+	assert( buf < &t->buf[0] || &t->buf[t->bufsize] < buf );
+
+	// size cannot be greater then free size in out buffer
+	const size_t freesize = t->bufsize - t->bufpos;
+	if ( size > freesize ) {
+		size = freesize;
 	}
-	// copy input data into buffer
-	memcpy(&t->buf[t->bufpos], &buf[0], size);
+
+	// copy input data into our buffer
+	memcpy(&t->buf[t->bufpos], buf, size);
+
 	// increment bufpos to notify that new data were received
-	t->armpos = t->bufpos += size;
+	t->bufpos += size;
 	// re-arm receiving
-	uartbufrx_Receive_IT(t);
+	uartbufrx_ArmReceive_IRQHandler_Callback(t, &t->buf[t->bufpos], t->bufsize - t->bufpos);
 }
 
