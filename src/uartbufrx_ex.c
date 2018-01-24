@@ -21,14 +21,18 @@
 size_t uartbufrx_waitfor_buflen_f(struct uartbufrx_s *t, size_t num, bool stop(void *), void *arg)
 {
 	size_t ret;
-	while( (ret = uartbufrx_len(t)) < num && !stop(arg) );
+	while( (ret = uartbufrx_len(t)) < num && !stop(arg) ) {
+		uartbufrx_waitfor_buflen_Callback(t, num);
+	}
 	return ret;
 }
 
 size_t uartbufrx_waitfor_buflen_t(struct uartbufrx_s *t, size_t num, timeout_t *timeout)
 {
 	size_t ret;
-	while( (ret = uartbufrx_len(t)) < num && !timeout_expired(timeout) );
+	while( (ret = uartbufrx_len(t)) < num && !timeout_expired(timeout) ) {
+		uartbufrx_waitfor_buflen_Callback(t, num);
+	}
 	return ret;
 }
 
@@ -272,4 +276,10 @@ bool uartbufrx_waitformsg(struct uartbufrx_s * restrict t,
 	return false;
 }
 
+/* Weak Callback functions --------------------------------------------------------- */
 
+__weak_symbol
+void uartbufrx_waitfor_buflen_Callback(const struct uartbufrx_s *t, size_t num)
+{
+
+}

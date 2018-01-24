@@ -11,6 +11,7 @@
 
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
 
 /* Private Macros ------------------------------------------------------- */
 
@@ -37,34 +38,36 @@ size_t uartbuftx_fifo_tail(const struct uartbuftx_s *t)
 	return ret;
 }
 
-static
-size_t uartbuftx_fifo_txsize(const struct uartbuftx_s *t)
-{
-	size_t ret;
-	uartbuftx_SIZE_T_ATOMIC_BLOCK(t) {
-		ret = t->txsize;
-	}
-	return ret;
-}
-
 static inline
 size_t uartbuftx_fifo_GetBiggestUsedBlock_IRQHandler(const struct uartbuftx_s *t)
 {
 	const size_t head = t->head;
 	const size_t tail = t->tail;
 	const size_t size = t->size;
-	const size_t ret = ( head >= tail ) ? ( head - tail ) : ( size - tail );
+	size_t ret;
+	if ( tail > head ) {
+		ret = size - tail;
+	} else {
+		ret = head - tail;
+	}
 	UARTBUF_DBG("%s %zu %zu %zu %zu\n", __func__, head, tail, size, ret);
 	return ret;
 }
 
 static inline
-size_t uartbuftx_fifo_GetBiggestFreeBlock_IRQHandler(const struct uartbuftx_s *t)
+size_t uartbuftx_fifo_GetBiggestFreeBlock(const struct uartbuftx_s *t)
 {
 	const size_t head = t->head;
-	const size_t tail = t->tail;
+	const size_t tail = uartbuftx_fifo_tail(t);
 	const size_t size = t->size;
-	const size_t ret = ( head >= tail ) ? ( head - tail ) : ( size - tail );
+	size_t ret;
+	if ( tail > head ) {
+		ret = tail - head - 1;
+	} else if ( tail == 0 ) {
+		ret = size - head - 1;
+	} else {
+		ret = size - head;
+	}
 	UARTBUF_DBG("%s %zu %zu %zu %zu\n", __func__, head, tail, size, ret);
 	return ret;
 }
@@ -101,39 +104,48 @@ void uartbuftx_Flush(struct uartbuftx_s *t)
 
 void uartbuftx_Write(struct uartbuftx_s *t, const uint8_t buf[restrict], size_t size)
 {
+	if ( size && ( !t->buf || t->size < 1 ) ) {
+		uartbuftx_Write_Callback(t, buf, size);
+		size = 0;
+	}
+	if ( !size ) {
+		uartbuftx_Flush(t);
+		return;
+	}
 	while( size ) {
-		{
-			// if theres no free space, wait for free space by calling Flush Callback
-			const size_t tail = uartbuftx_fifo_tail(t);
-			const bool isfree = t->head != tail;
-			if ( !isfree ) {
-				uartbuftx_Flush_Callback(t);
-				continue;
-			}
+		// get biggest block we can copy into fifo
+		const size_t free = uartbuftx_fifo_GetBiggestFreeBlock(t);
+		if ( free == 0 ) {
+			uartbuftx_Flush_Callback(t);
+			continue;
 		}
 
-		t->buf[t->head] = buf[0];
+		const size_t len = size > free ? free : size;
+		// copy data up to len bytes
+		memcpy(&t->buf[t->head], &buf[0], len);
+		// increment head pointer
 		{
-			const size_t newhead = uartbuftx_fifo_IncPos(t, t->head, 1);
+			const size_t newhead = uartbuftx_fifo_IncPos(t, t->head, len);
 			uartbuftx_SIZE_T_ATOMIC_BLOCK(t) {
 				t->head = newhead;
 			}
 		}
+		// rearm writing if ended
 		if ( !uartbuftx_IsWriting(t) ) {
-			t->head = t->tail = 0;
+			// we may call IRQHandler from here, cause IRQ is not armed, as we are not writing
 			const size_t txsize = uartbuftx_fifo_GetBiggestUsedBlock_IRQHandler(t);
 			uartbuftx_Write_Callback(t, &t->buf[t->tail], txsize);
 		}
 
-		++buf;
-		--size;
+		size -= len;
+		buf += len;
 	}
 }
 
 void uartbuftx_printf(struct uartbuftx_s *t)
 {
-	printf("head=%2zu size=%2zu tail=%2zu txsize=%2zu \"",
-			t->head, t->size, ufifo_tail(t), ufifo_txsize(t));
+	printf("head=%2zu size=%2zu tail=%2zu\"",
+			t->head, t->size, uartbuftx_fifo_tail(t));
 	for(size_t i = 0; i < t->size; ++i) {
 		printf("%c", t->buf[i]);
 	}
@@ -142,7 +154,8 @@ void uartbuftx_printf(struct uartbuftx_s *t)
 
 void uartbuftx_TxCplt_IRQHandler(struct uartbuftx_s *t, size_t size)
 {
-	unitassert( t->tail + size <= ( t->head >= t->tail ? t->head : t->size ) );
+	if ( !t->size ) return;
+	assert( size <= uartbuftx_fifo_GetBiggestUsedBlock_IRQHandler(t) );
 	t->tail = uartbuftx_fifo_IncPos(t, t->tail, size);
 	const size_t txsize = uartbuftx_fifo_GetBiggestUsedBlock_IRQHandler(t);
 	uartbuftx_Write_IRQHandler_Callback(t, &t->buf[t->tail], txsize);
@@ -177,6 +190,12 @@ void uartbuftx_DisableIRQ_Callback(const struct uartbuftx_s *t)
 	// NVIC_Disable_IRQ(IRQ_UART2);
 }
 
+__weak_symbol
+bool uartbuftx_IsWriting_Callback(const struct uartbuftx_s *t)
+{
+	return false;
+}
+
 /**
  * Write size bytes starting from buf to uart
  * @param t
@@ -206,6 +225,8 @@ void uartbuftx_Write_IRQHandler_Callback(struct uartbuftx_s *t, const uint8_t bu
 {
 #if UARTBUFTX_USE_PNT_CALLBACKS
 	if ( t->Write_IRQHandler ) t->Write_IRQHandler(t, buf, size);
+#else
+	uartbuftx_Write_Callback(t, buf, size);
 #endif // UARTBUFTX_USE_PNT_CALLBACKS
 	// if ( size == 0 ) return;
 	// if ( HAL_UART_Transmit_DMA(t->priv.huart, buf, size, 100) != HAL_OK ) assert(0);

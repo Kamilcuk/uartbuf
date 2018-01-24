@@ -66,23 +66,24 @@ struct uartbufrx_findmsgconf_s {
 
 int uartbufrx_findmsg_beginning(struct uartbufrx_s *t, size_t minlen,
 		int (*checkBeginning)(const uint8_t buf[], size_t minlen, void *arg), void *arg, timeout_t *timeout)
-		__nonnull((1,3,5));
+		__nonnull_all;
 int uartbufrx_findmsg_ending(struct uartbufrx_s *t, size_t startlen, size_t maxlen,
 		int (*checkEnding)(const uint8_t buf[], size_t len, void *arg), void *arg, timeout_t *timeout)
-		__nonnull((1,4,6));
+		__nonnull_all;
 
 int uartbufrx_findmsg(struct uartbufrx_s *t, const uint8_t **msg,
-		const struct uartbufrx_findmsgconf_s *conf, void *arg, unsigned int Timeout)
-		__nonnull((1,3));
+		const struct uartbufrx_findmsgconf_s *conf, void *arg, unsigned int Timeout);
 void uartbufrx_findmsg_next(struct uartbufrx_s *t, size_t size)
-		__nonnull((1));
+		__nonnull_all;
 
 int uartbufrx_getmsg(struct uartbufrx_s *t, const struct uartbufrx_findmsgconf_s * restrict conf,
 		uint8_t buf[restrict], size_t buflen, unsigned int timeout)
-		__nonnull((1,3));
+		__nonnull_all;
 bool uartbufrx_waitformsg(struct uartbufrx_s * restrict t,
 		const uint8_t msg[restrict], size_t msgsize, unsigned int timeout)
-		__nonnull((1,2));
+		__nonnull_all;
+
+void uartbufrx_waitfor_buflen_Callback(const struct uartbufrx_s *t, size_t num);
 
 #endif /* UARTBUFRX_EX_H_ */
 
